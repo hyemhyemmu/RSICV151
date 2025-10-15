@@ -6,6 +6,7 @@ module control_unit (
     // Control signals
     output reg [3:0] alu_op,     // ALU operation select
     output reg [2:0] imm_type,   // Immediate type
+    output reg [2:0] funct3_out, // funct3 (for Load/Store/Branch)
     output reg reg_write,        // Register write enable
     output reg mem_read,         // Memory read enable
     output reg mem_write,        // Memory write enable
@@ -40,37 +41,41 @@ module control_unit (
     localparam IMM_U = 3'b011;
     localparam IMM_J = 3'b100;
     
-    // ALU source select encoding
-    localparam ALU_SRC_REG = 2'b00;
-    localparam ALU_SRC_PC  = 2'b01;
-    localparam ALU_SRC_IMM = 2'b01;
-    localparam ALU_SRC_4   = 2'b10;
+    // ALU source 1 select encoding
+    localparam ALU1_RS1 = 2'b00;  // rs1
+    localparam ALU1_PC  = 2'b01;  // PC
+    localparam ALU1_ZERO = 2'b10; // 0 (for LUI)
+    
+    // ALU source 2 select encoding
+    localparam ALU2_RS2 = 2'b00;  // rs2
+    localparam ALU2_IMM = 2'b01;  // Imm
     
     // Writeback select encoding
     localparam WB_ALU = 2'b00;
     localparam WB_MEM = 2'b01;
     localparam WB_PC4 = 2'b10;
     
-    // Main control logic
+    // MAIN CONTROL LOGIC
     always @(*) begin
-        // Default values (prevent latches)
+        // default values (prevent latches)
         alu_op = ALU_ADD;
         imm_type = IMM_I;
+        funct3_out = funct3;     // Pass through funct3 by default
         reg_write = 1'b0;
         mem_read = 1'b0;
         mem_write = 1'b0;
-        alu_src1 = ALU_SRC_REG;
-        alu_src2 = ALU_SRC_REG;
+        alu_src1 = ALU1_RS1;
+        alu_src2 = ALU2_RS2;
         wb_sel = WB_ALU;
         branch = 1'b0;
         jump = 1'b0;
         
         case(opcode)
-            // R-type arithmetic/logic instructions
+            // R-type
             `OPC_ARI_RTYPE: begin
                 reg_write = 1'b1;
-                alu_src1 = ALU_SRC_REG;  // rs1
-                alu_src2 = ALU_SRC_REG;  // rs2
+                alu_src1 = ALU1_RS1;  // rs1
+                alu_src2 = ALU2_RS2;  // rs2
                 wb_sel = WB_ALU;
                 
                 case(funct3)
@@ -86,12 +91,12 @@ module control_unit (
                 endcase
             end
             
-            // I-type arithmetic/logic instructions
+            // I-type
             `OPC_ARI_ITYPE: begin
                 reg_write = 1'b1;
                 imm_type = IMM_I;
-                alu_src1 = ALU_SRC_REG;  // rs1
-                alu_src2 = ALU_SRC_IMM;  // immediate
+                alu_src1 = ALU1_RS1;  // rs1
+                alu_src2 = ALU2_IMM;  // immediate
                 wb_sel = WB_ALU;
                 
                 case(funct3)
@@ -112,29 +117,33 @@ module control_unit (
                 reg_write = 1'b1;
                 mem_read = 1'b1;
                 imm_type = IMM_I;
-                alu_src1 = ALU_SRC_REG;  // rs1 (base address)
-                alu_src2 = ALU_SRC_IMM;  // offset
-                alu_op = ALU_ADD;        // address = rs1 + offset
-                wb_sel = WB_MEM;         // write memory data to register
+                alu_src1 = ALU1_RS1;  // rs1 (base address)
+                alu_src2 = ALU2_IMM;  // offset
+                alu_op = ALU_ADD;     // address = rs1 + offset
+                wb_sel = WB_MEM;      // write memory data to register
+                funct3_out = funct3;  // Pass funct3 to memory controller
+                // funct3 determines: LB(000), LH(001), LW(010), LBU(100), LHU(101)
             end
             
             // Store instructions
             `OPC_STORE: begin
-                reg_write = 1'b0;        // no register write
+                reg_write = 1'b0;     // no register write
                 mem_write = 1'b1;
                 imm_type = IMM_S;
-                alu_src1 = ALU_SRC_REG;  // rs1 (base address)
-                alu_src2 = ALU_SRC_IMM;  // offset
-                alu_op = ALU_ADD;        // address = rs1 + offset
+                alu_src1 = ALU1_RS1;  // rs1 (base address)
+                alu_src2 = ALU2_IMM;  // offset
+                alu_op = ALU_ADD;     // address = rs1 + offset
+                funct3_out = funct3;  // Pass funct3 to memory controller
+                // funct3 determines: SB(000), SH(001), SW(010)
             end
             
             // Branch instructions
             `OPC_BRANCH: begin
-                reg_write = 1'b0;        // no register write
+                reg_write = 1'b0;     // no register write
                 branch = 1'b1;
                 imm_type = IMM_B;
-                alu_src1 = ALU_SRC_REG;  // rs1
-                alu_src2 = ALU_SRC_REG;  // rs2
+                alu_src1 = ALU1_RS1;  // rs1
+                alu_src2 = ALU2_RS2;  // rs2
                 
                 // ALU performs comparison
                 case(funct3)
@@ -153,10 +162,10 @@ module control_unit (
                 reg_write = 1'b1;
                 jump = 1'b1;
                 imm_type = IMM_J;
-                wb_sel = WB_PC4;         // save PC+4 to rd
-                alu_src1 = ALU_SRC_PC;   // PC
-                alu_src2 = ALU_SRC_IMM;  // offset
-                alu_op = ALU_ADD;        // target = PC + offset
+                wb_sel = WB_PC4;      // save PC+4 to rd
+                alu_src1 = ALU1_PC;   // PC
+                alu_src2 = ALU2_IMM;  // offset
+                alu_op = ALU_ADD;     // target = PC + offset
             end
             
             // JALR (Jump and Link Register)
@@ -164,19 +173,19 @@ module control_unit (
                 reg_write = 1'b1;
                 jump = 1'b1;
                 imm_type = IMM_I;
-                wb_sel = WB_PC4;         // save PC+4 to rd
-                alu_src1 = ALU_SRC_REG;  // rs1
-                alu_src2 = ALU_SRC_IMM;  // offset
-                alu_op = ALU_ADD;        // target = rs1 + offset
+                wb_sel = WB_PC4;      // save PC+4 to rd
+                alu_src1 = ALU1_RS1;  // rs1
+                alu_src2 = ALU2_IMM;  // offset
+                alu_op = ALU_ADD;     // target = rs1 + offset
             end
             
             // LUI (Load Upper Immediate)
             `OPC_LUI: begin
                 reg_write = 1'b1;
                 imm_type = IMM_U;
-                alu_src1 = ALU_SRC_REG;  // ignored (can be 0)
-                alu_src2 = ALU_SRC_IMM;  // immediate << 12
-                alu_op = ALU_ADD;        // rd = 0 + immediate
+                alu_src1 = ALU1_ZERO; // 0
+                alu_src2 = ALU2_IMM;  // immediate << 12
+                alu_op = ALU_ADD;     // rd = 0 + immediate
                 wb_sel = WB_ALU;
             end
             
@@ -184,9 +193,9 @@ module control_unit (
             `OPC_AUIPC: begin
                 reg_write = 1'b1;
                 imm_type = IMM_U;
-                alu_src1 = ALU_SRC_PC;   // PC
-                alu_src2 = ALU_SRC_IMM;  // immediate << 12
-                alu_op = ALU_ADD;        // rd = PC + immediate
+                alu_src1 = ALU1_PC;   // PC
+                alu_src2 = ALU2_IMM;  // immediate << 12
+                alu_op = ALU_ADD;     // rd = PC + immediate
                 wb_sel = WB_ALU;
             end
             
